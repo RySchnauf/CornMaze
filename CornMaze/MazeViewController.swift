@@ -61,7 +61,7 @@ class MazeViewController: UIViewController, NFCNDEFReaderSessionDelegate {
     func readerSession(_ session: NFCNDEFReaderSession, didDetectNDEFs messages: [NFCNDEFMessage]) {
         for message in messages {
             for record in message.records {
-                var payload = (record.payload).suffix(from: 3v)
+                var payload = (record.payload).suffix(from: 3)
                 var encoding = String.Encoding.utf8
                 if(record.payload[3] == 255){
                     payload = (record.payload).suffix(from: 5)
