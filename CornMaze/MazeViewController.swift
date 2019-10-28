@@ -7,155 +7,197 @@
 //
 
 import UIKit
+import CoreNFC
 
-class MazeViewController: UIViewController, UITableViewDelegate, UITableViewDataSource {
+class MazeViewController: UIViewController, NFCNDEFReaderSessionDelegate {
 
     @IBOutlet weak var FoundTag: UIButton!
-    @IBOutlet weak var NFCTableView: UITableView!
+    @IBOutlet weak var restartButton: UIButton!
+    @IBOutlet weak var TimeRemaining: UILabel!
+    @IBOutlet weak var tagsFound: UILabel!
+    @IBOutlet weak var lastFoundTime: UILabel!
+    @IBOutlet weak var lastFoundText: UILabel!
 
     let defaults = UserDefaults.standard
 
-    var nfcTags: [String] = []
-    var timeDict = [String: String]()
     var startDate = Date.init()
-    var activeTag = 0
+    var scannedTags: [String] = []
 
-    func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-        return 4
-    }
-
-    func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        let cell = tableView.dequeueReusableCell(withIdentifier: "NFCCell", for: indexPath) as UITableViewCell
-
-        let tag = nfcTags[indexPath.row]
-
-        if(timeDict[tag] != nil){
-            cell.textLabel?.text = "\(tag)"
-            cell.detailTextLabel?.text = timeDict[tag]
-        } else if(indexPath.row == 0 || timeDict[nfcTags[indexPath.row-1]] != nil) {
-            cell.textLabel?.text = "\(tag)"
-            cell.detailTextLabel?.text = "--:--:--"
-        } else {
-            cell.textLabel?.text = "????"
-            cell.detailTextLabel?.text = "--:--:--"
-        }
-        return cell
-    }
-
+    var session: NFCNDEFReaderSession?
+    var restarting = false
+    var running = false
 
 
     override func viewDidLoad() {
         super.viewDidLoad()
 
-        if let TimeDict = defaults.object([String:String].self, with: "timeDict"),
-        let NFCTags = defaults.object([String].self, with: "nfcTags"),
-        let StartDate = defaults.object(Date.self, with: "startDate") {
+        _ = Timer.scheduledTimer(timeInterval: 1.0, target: self, selector: #selector(fire), userInfo: nil, repeats: true)
+
+        if let ScannedTags = defaults.object(forKey: "scannedTags") as? [String],
+            let StartDate = defaults.object(forKey: "startDate") as? Date,
+            let LastText = defaults.object(forKey: "lastText") as? String,
+            let LastTime = defaults.object(forKey: "lastTime") as? String
+        {
             //if items are in userDefaults
-            timeDict = TimeDict
-            nfcTags = NFCTags
             startDate = StartDate
-            activeTag = defaults.integer(forKey: "activeTag")
+            scannedTags = ScannedTags
+            lastFoundText.text = LastText
+            lastFoundTime.text = LastTime
+            tagsFound.text = "\(scannedTags.count)"
+            running = true
+
         } else {
             //start a new maze
-            restart()
-
+            running = false
+            restartButton.setTitle("Start", for: .normal)
         }
 
+    }
 
-        NFCTableView.delegate = self
-        NFCTableView.dataSource = self
+    func readerSession(_ session: NFCNDEFReaderSession, didInvalidateWithError error: Error) {
+        print(error.localizedDescription)
+    }
 
-        refresh()
+    func readerSession(_ session: NFCNDEFReaderSession, didDetectNDEFs messages: [NFCNDEFMessage]) {
+        for message in messages {
+            for record in message.records {
+                var payload = (record.payload).suffix(from: 3v)
+                var encoding = String.Encoding.utf8
+                if(record.payload[3] == 255){
+                    payload = (record.payload).suffix(from: 5)
+                    encoding = String.Encoding.utf16LittleEndian
+                }
+                if let string = String(data: payload, encoding: encoding) {
+                    print(string)
+                    if(restarting)
+                    {
+                        //only do this check when restarting
+                        if(string.contains("restart"))
+                        {
+                            restart()
+                            restarting = false
+                        }
+                    }
+                    //only when not restarting
+                    else {
+
+                        scanTags(tagString: string)
+                    }
+                }
+            }
+        }
+    }
+
+    @objc func fire()
+    {
+        if(running)
+        {
+            updateTime()
+        }
     }
 
     @IBAction func buttonTapped(button: UIButton)
     {
-        completeTag()
+        restarting = false
+        session = NFCNDEFReaderSession(delegate: self, queue: DispatchQueue.main, invalidateAfterFirstRead: false)
+        session?.begin()
+    }
+
+    @IBAction func restartButton(_ sender: Any) {
+        restarting = true
+        session = NFCNDEFReaderSession(delegate: self, queue: DispatchQueue.main, invalidateAfterFirstRead: false)
+        session?.begin()
+        restartButton.setTitle("Restart", for: .normal)
+    }
+
+    func finish() {
+        //idkl what to do when finished yet (pause timer?)
     }
 
     func restart() {
-        let domain = Bundle.main.bundleIdentifier!
-        UserDefaults.standard.removePersistentDomain(forName: domain)
         UserDefaults.standard.synchronize()
-        timeDict = [String: String]()
         startDate = Date.init()
-        activeTag = 0
-        nfcTags = chooseTargets()
-
+        scannedTags = []
+        running = true
+        lastFoundTime.text = "00:00"
+        lastFoundText.text = ""
+        tagsFound.text = "\(scannedTags.count)"
         updateValues()
+    }
 
-        refresh()
+    func scanTags(tagString: String) {
+        if(!scannedTags.contains(tagString) && running) {
+            scannedTags.append(tagString)
+            updateLastFoundTime(lastScannedDate: Date.init())
+            tagsFound.text = "\(scannedTags.count)"
+            lastFoundText.text = tagString
+            updateValues()
+        }
     }
 
     func updateValues() {
-        defaults.set(timeDict, forKey: "timeDict")
-        defaults.set(nfcTags, forKey: "nfcTags")
         defaults.set(startDate, forKey: "startDate")
-        defaults.set(activeTag, forKey: "activeTag")
+        defaults.set(scannedTags, forKey: "scannedTags")
+        defaults.set(lastFoundTime.text, forKey: "lastTime")
+        defaults.set(lastFoundText.text, forKey: "lastText")
     }
 
-    func recordTime(tag: String) {
+    func updateTime() {
         var seconds = Int(Date.init().timeIntervalSince(startDate))
-        var minutes = 0
-        var hours = 0
-        while seconds >= 60 {
-            seconds = seconds - 60
-            if minutes == 59 {
-                minutes = 0
-                hours = hours + 1
-            } else {
-                minutes = minutes + 1
+        var minutes = 29
+        if(!checkPast()){
+            while seconds > 60 {
+                seconds = seconds - 60
+                minutes = minutes - 1
             }
+            seconds = 60 - seconds
+        } else {
+            minutes = 0
+            seconds = 0
+            running = false
         }
-        var hoursString = "\(hours)"
+
         var minutesString = "\(minutes)"
         var secondsString = "\(seconds)"
 
-        if(hours < 10) { hoursString = "0\(hours)" }
+        if(minutes < 10) { minutesString = "0\(minutes)" }
+        if(seconds < 10) { secondsString = "0\(seconds)" }
+        //write to the timer
+
+        TimeRemaining.text = minutesString + ":" + secondsString
+    }
+
+    func updateLastFoundTime(lastScannedDate: Date) {
+        var seconds = Int(lastScannedDate.timeIntervalSince(startDate))
+        var minutes = 29
+        if(!checkPast()){
+            while seconds > 60 {
+                seconds = seconds - 60
+                minutes = minutes - 1
+            }
+            seconds = 60 - seconds
+        } else {
+            minutes = 0
+            seconds = 0
+            running = false
+        }
+
+        var minutesString = "\(minutes)"
+        var secondsString = "\(seconds)"
+
         if(minutes < 10) { minutesString = "0\(minutes)" }
         if(seconds < 10) { secondsString = "0\(seconds)" }
 
-        timeDict.updateValue("\(hoursString):\(minutesString):\(secondsString)", forKey: tag)
+        lastFoundTime.text = minutesString + ":" + secondsString
     }
 
-    func completeTag(){
-        recordTime(tag: nfcTags[activeTag])
-        activeTag += 1
-        if(activeTag > 3) { activeTag = 3}
 
-        updateValues()
 
-        refresh()
+    func checkPast() -> Bool {
+        let seconds = Int(Date.init().timeIntervalSince(startDate))
+        return seconds >= (60*30)
     }
 
-    func refresh(){
-        self.NFCTableView.reloadData()
-    }
-
-    func chooseTargets() -> [String] {
-        var remaining = [1, 2, 3, 4]
-        var chips:[String] = []
-        while remaining.count > 0 {
-            let select = Int.random(in: 0 ... remaining.count-1)
-            chips.append("\(selectNFC(quadrant: remaining[select]))")
-            remaining.remove(at: select)
-        }
-        return chips
-    }
-
-    func selectNFC(quadrant: Int) -> Int {
-        switch quadrant {
-        case 1:
-            return Int.random(in: 1...4)
-        case 2:
-            return Int.random(in: 5...8)
-        case 3:
-            return Int.random(in: 9...12)
-        default:
-            return Int.random(in: 13...16)
-        }
-
-    }
 }
 
 extension UserDefaults {
